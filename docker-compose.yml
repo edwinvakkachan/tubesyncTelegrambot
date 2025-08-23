@@ -1,0 +1,9 @@
+services:
+  ytbot:
+    build: .
+    image: yt-telegram-bot:latest
+    restart: unless-stopped
+    environment:
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN}
+      API_TOKEN: ${API_TOKEN}
+      TUBE_API_URL: ${TUBE_API_URL}
