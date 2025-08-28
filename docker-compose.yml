@@ -4,13 +4,7 @@ services:
     image: yt-telegram-bot:latest
     container_name: tubesyncbot   
     restart: unless-stopped
-    user: "1000:1000" 
     environment:
       TELEGRAM_TOKEN: ${TELEGRAM_TOKEN}
       API_TOKEN: ${API_TOKEN}
       TUBE_API_URL: ${TUBE_API_URL}
-    volumes:
-      - ytbot_data:/app/data 
-
-volumes:
-  ytbot_data:    
