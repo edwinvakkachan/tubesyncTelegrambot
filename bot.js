@@ -1,11 +1,11 @@
-// bot.js
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
-const axios = require('axios');
+const { createClient } = require('@supabase/supabase-js');
 const { extractYoutubeId } = require('./utils/youtube');
 
-// ---------- Logging helpers (IST) ----------
+// ---------- Logging helpers ----------
 const TZ = 'Asia/Kolkata';
+
 const ts = () =>
   new Date().toLocaleString('en-IN', {
     timeZone: TZ,
@@ -24,15 +24,21 @@ const err = (...args) => console.error(`[${ts()}] ❌`, ...args);
 
 // ---------- Env ----------
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const API_TOKEN = process.env.API_TOKEN;
-const TUBE_API_URL = process.env.TUBE_API_URL;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-if (!TELEGRAM_TOKEN || !API_TOKEN || !TUBE_API_URL) {
-  err('Missing env vars: TELEGRAM_TOKEN, API_TOKEN, or TUBE_API_URL');
+if (!TELEGRAM_TOKEN || !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  err('Missing env vars');
   process.exit(1);
 }
 
-log('Starting bot with polling…');
+// ---------- Supabase ----------
+const supabase = createClient(
+  SUPABASE_URL,
+  SUPABASE_SERVICE_ROLE_KEY
+);
+
+log('Starting bot with polling...');
 
 // ---------- Bot ----------
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
@@ -42,88 +48,61 @@ bot.on('polling_error', (e) => err('Polling error:', e?.message || e));
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = (msg.text || '').trim();
-  const who =
-    msg.from?.username
-      ? `@${msg.from.username} (${msg.from.id})`
-      : `${msg.from?.first_name || 'User'} (${msg.from?.id || 'id?'})`;
 
   if (!text) return;
 
-  log(`Message received from ${who} in chat ${chatId}: "${text}"`);
-
   if (text === '/start') {
-    log('Handled /start for', who);
     return bot.sendMessage(
       chatId,
-      'Send me a YouTube link or 11-char video ID to start a download.'
+      'Send me a YouTube link or video ID to queue it.'
     );
   }
-
-  // ----- Link received -----
-  log('Link/text received:', text);
 
   const youtubeId = extractYoutubeId(text);
 
   if (!youtubeId) {
-    warn('Could not parse a YouTube ID from message.');
-    return bot.sendMessage(chatId, '⚠️ Please send a valid YouTube video link or 11-char ID.');
+    return bot.sendMessage(
+      chatId,
+      '⚠️ Please send a valid YouTube link or ID.'
+    );
   }
 
-  log('Parsed YouTube ID:', youtubeId);
-
-  // ----- Start download -----
-  const payload = { data: [{ youtube_id: youtubeId, status: 'pending' }] };
-
-  log('Starting download request →', TUBE_API_URL, 'payload:', payload);
-
   try {
-    const startedAt = Date.now();
+    const { error } = await supabase
+      .from('youtube_queue')
+      .insert([
+        {
+          youtube_id: youtubeId,
+          original_input: text,
+          status: 'pending',
+        },
+      ]);
 
-    const res = await axios.post(TUBE_API_URL, payload, {
-      headers: {
-        Authorization: `Token ${API_TOKEN}`,
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      timeout: 15000,
-      // Never log sensitive headers
-      validateStatus: (s) => s >= 200 && s < 500, // let us log 4xx bodies
-    });
+    if (error) throw error;
 
-    const ms = Date.now() - startedAt;
-    if (res.status >= 200 && res.status < 300) {
-      log(`Download trigger succeeded (HTTP ${res.status}) in ${ms}ms for ID ${youtubeId}`);
-      bot.sendMessage(chatId, `✅ Download started for YouTube ID: ${youtubeId}`);
-    } else {
-      warn(
-        `Download trigger returned HTTP ${res.status} in ${ms}ms for ID ${youtubeId}. Body:`,
-        JSON.stringify(res.data, null, 2)
-      );
-      bot.sendMessage(
-        chatId,
-        `⚠️ Server responded with ${res.status}:\n${JSON.stringify(res.data, null, 2)}`
-      );
-    }
-  } catch (error) {
-    // Network/timeout or thrown errors
-    const msgText =
-      error.response?.data ?? error.message ?? 'Unknown error (no message from server)';
-    err('Download trigger failed:', msgText);
+    log('Stored in Supabase:', youtubeId);
+
     bot.sendMessage(
       chatId,
-      `❌ Failed to trigger download:\n${
-        typeof msgText === 'string' ? msgText : JSON.stringify(msgText, null, 2)
-      }`
+      `✅ Added to queue: ${youtubeId}`
+    );
+  } catch (e) {
+    err('Supabase insert failed:', e.message);
+
+    bot.sendMessage(
+      chatId,
+      `❌ Failed to save queue item:\n${e.message}`
     );
   }
 });
 
 // ---------- Graceful shutdown ----------
 process.once('SIGINT', () => {
-  log('SIGINT received, stopping polling…');
-  bot.stopPolling().finally(() => log('Polling stopped. Bye!'));
+  log('SIGINT received, stopping polling...');
+  bot.stopPolling().finally(() => log('Stopped.'));
 });
+
 process.once('SIGTERM', () => {
-  log('SIGTERM received, stopping polling…');
-  bot.stopPolling().finally(() => log('Polling stopped. Bye!'));
+  log('SIGTERM received, stopping polling...');
+  bot.stopPolling().finally(() => log('Stopped.'));
 });
