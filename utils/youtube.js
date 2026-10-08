@@ -1,10 +1,15 @@
 // utils/youtube.js
-function extractYoutubeId(text = "") {
-  const input = String(text).trim();
+function getCandidate(text = "") {
+  const input = String(text).trim().replace(/\\([&?=])/g, "$1");
 
-  // Try to find a URL inside a longer message
-  const urlMatch = input.match(/https?:\/\/[^\s]+/);
-  const candidate = urlMatch ? urlMatch[0] : input;
+  // Try to find a URL inside a longer message. Stop before Markdown delimiters
+  // so pasted links like [https://...](https://...) still parse cleanly.
+  const urlMatch = input.match(/https?:\/\/[^\s\])>]+/);
+  return urlMatch ? urlMatch[0] : input;
+}
+
+function extractYoutubeId(text = "") {
+  const candidate = getCandidate(text);
 
   try {
     // If it's a URL, use URL parsing
@@ -54,11 +59,7 @@ function extractYoutubeId(text = "") {
 }
 
 function extractYoutubePlaylistId(text = "") {
-  const input = String(text).trim();
-
-  // Try to find a URL inside a longer message
-  const urlMatch = input.match(/https?:\/\/[^\s]+/);
-  const candidate = urlMatch ? urlMatch[0] : input;
+  const candidate = getCandidate(text);
 
   try {
     const u = new URL(candidate);
@@ -78,6 +79,18 @@ function extractYoutubePlaylistId(text = "") {
   return raw ? raw[1] : null;
 }
 
+function extractYoutubePlaylistSeedId(text = "", playlistId = null) {
+  const candidate = getCandidate(text);
+  const list = playlistId || extractYoutubePlaylistId(candidate);
+
+  if (list?.startsWith("RD")) {
+    const radioSeed = list.slice(2, 13);
+    if (/^[A-Za-z0-9_-]{11}$/.test(radioSeed)) return radioSeed;
+  }
+
+  return extractYoutubeId(candidate);
+}
+
 function extractVideoIdsFromPlaylistHtml(html = "") {
   const ids = new Set();
   const pattern = /"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/g;
@@ -93,5 +106,6 @@ function extractVideoIdsFromPlaylistHtml(html = "") {
 module.exports = {
   extractYoutubeId,
   extractYoutubePlaylistId,
+  extractYoutubePlaylistSeedId,
   extractVideoIdsFromPlaylistHtml,
 };

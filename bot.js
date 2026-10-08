@@ -5,6 +5,7 @@ const axios = require('axios');
 const {
   extractYoutubeId,
   extractYoutubePlaylistId,
+  extractYoutubePlaylistSeedId,
   extractVideoIdsFromPlaylistHtml,
 } = require('./utils/youtube');
 
@@ -236,6 +237,11 @@ bot.on('message', async (msg) => {
   if (playlistId) {
     try {
       const videoIds = await fetchPlaylistVideoIds(playlistId);
+      const seedVideoId = extractYoutubePlaylistSeedId(text, playlistId);
+
+      if (!videoIds.length && seedVideoId) {
+        videoIds.push(seedVideoId);
+      }
 
       if (!videoIds.length) {
         return bot.sendMessage(
