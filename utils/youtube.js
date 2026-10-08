@@ -53,4 +53,45 @@ function extractYoutubeId(text = "") {
   return raw ? raw[1] : null;
 }
 
-module.exports = { extractYoutubeId };
+function extractYoutubePlaylistId(text = "") {
+  const input = String(text).trim();
+
+  // Try to find a URL inside a longer message
+  const urlMatch = input.match(/https?:\/\/[^\s]+/);
+  const candidate = urlMatch ? urlMatch[0] : input;
+
+  try {
+    const u = new URL(candidate);
+    const host = u.hostname.replace(/^www\./, "");
+    const isYouTube =
+      host === "youtube.com" || host === "m.youtube.com" || host === "youtu.be" || host === "music.youtube.com";
+
+    if (isYouTube) {
+      const list = u.searchParams.get("list");
+      if (list && /^[A-Za-z0-9_-]+$/.test(list)) return list;
+    }
+  } catch {
+    // Not a URL — continue to raw playlist ID check
+  }
+
+  const raw = candidate.match(/\b((?:PL|UU|LL|FL|OLAK5uy_|RD|PU)[A-Za-z0-9_-]+)\b/);
+  return raw ? raw[1] : null;
+}
+
+function extractVideoIdsFromPlaylistHtml(html = "") {
+  const ids = new Set();
+  const pattern = /"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/g;
+  let match;
+
+  while ((match = pattern.exec(html)) !== null) {
+    ids.add(match[1]);
+  }
+
+  return Array.from(ids);
+}
+
+module.exports = {
+  extractYoutubeId,
+  extractYoutubePlaylistId,
+  extractVideoIdsFromPlaylistHtml,
+};
