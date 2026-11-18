@@ -30,7 +30,6 @@ const warn = (...args) => console.warn(`[${ts()}] ⚠️`, ...args);
 const err = (...args) => console.error(`[${ts()}] ❌`, ...args);
 
 const PLAYLIST_FETCH_TIMEOUT_MS = 15000;
-const CHANNEL_POLL_INTERVAL_MS = Math.max(60000, Number(process.env.CHANNEL_POLL_INTERVAL_MS) || 15 * 60 * 1000);
 const YOUTUBE_WEB_HEADERS = {
   'User-Agent':
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
@@ -232,18 +231,20 @@ async function fetchChannelVideoIds(channelId) {
 async function getSubscriptions(chatId) {
   const { data, error } = await supabase
     .from('youtube_channel_subscriptions')
-    .select('channel_id, channel_url, last_seen_video_id')
-    .eq('chat_id', String(chatId));
+    .select('channel_id, channel_url, status')
+    .eq('chat_id', String(chatId))
+    .eq('action', 'subscribe');
   if (error) throw error;
   return data || [];
 }
 
-async function saveSubscription(chatId, channelId, channelUrl, lastSeenVideoId) {
+async function saveSubscription(chatId, channelId, channelUrl, action) {
   const { error } = await supabase.from('youtube_channel_subscriptions').upsert({
     chat_id: String(chatId),
     channel_id: channelId,
     channel_url: channelUrl,
-    last_seen_video_id: lastSeenVideoId || null,
+    action,
+    status: 'pending',
   }, { onConflict: 'chat_id,channel_id' });
   if (error) throw error;
 }
@@ -255,35 +256,6 @@ async function queueChannelVideos(channelId, channelUrl, videoIds) {
     original_input: channelUrl,
     status: 'pending',
   })));
-}
-
-async function pollSubscriptions() {
-  try {
-    const { data: subscriptions, error } = await supabase
-      .from('youtube_channel_subscriptions')
-      .select('chat_id, channel_id, channel_url, last_seen_video_id');
-    if (error) throw error;
-
-    for (const subscription of subscriptions || []) {
-      try {
-        const videoIds = await fetchChannelVideoIds(subscription.channel_id);
-        const unseen = [];
-        for (const id of videoIds) {
-          if (id === subscription.last_seen_video_id) break;
-          unseen.push(id);
-        }
-        if (unseen.length) {
-          await queueChannelVideos(subscription.channel_id, subscription.channel_url, unseen);
-          await saveSubscription(subscription.chat_id, subscription.channel_id, subscription.channel_url, videoIds[0]);
-          await bot.sendMessage(subscription.chat_id, `🔔 ${unseen.length} new video(s) added from ${subscription.channel_url}`);
-        }
-      } catch (e) {
-        warn(`Subscription refresh failed for ${subscription.channel_id}:`, e.message);
-      }
-    }
-  } catch (e) {
-    warn('Could not refresh channel subscriptions:', e.message);
-  }
 }
 
 async function addQueueItems(rows) {
@@ -317,16 +289,12 @@ bot.on('message', async (msg) => {
     try {
       const channelId = await resolveYoutubeChannelId(channel);
       if (command[1].toLowerCase() === 'unsubscribe') {
-        const { error } = await supabase.from('youtube_channel_subscriptions')
-          .delete().eq('chat_id', String(chatId)).eq('channel_id', channelId);
-        if (error) throw error;
-        return bot.sendMessage(chatId, `✅ Unsubscribed from ${channelId}.`);
+        await saveSubscription(chatId, channelId, channel.url, 'unsubscribe');
+        return bot.sendMessage(chatId, `✅ Unsubscribe request for ${channelId} sent to TubeArchivist.`);
       }
 
-      const videoIds = await fetchChannelVideoIds(channelId);
-      await queueChannelVideos(channelId, channel.url, videoIds);
-      await saveSubscription(chatId, channelId, channel.url, videoIds[0]);
-      return bot.sendMessage(chatId, `✅ Subscribed to ${channelId}. Added ${videoIds.length} existing video(s); new uploads will be queued automatically.`);
+      await saveSubscription(chatId, channelId, channel.url, 'subscribe');
+      return bot.sendMessage(chatId, `✅ Subscribe request for ${channelId} sent to TubeArchivist.`);
     } catch (e) {
       err('Channel subscription failed:', e.message);
       return bot.sendMessage(chatId, `❌ Could not ${command[1].toLowerCase()} channel:\n${e.message}`);
@@ -435,8 +403,6 @@ bot.on('message', async (msg) => {
     );
   }
 });
-
-setInterval(pollSubscriptions, CHANNEL_POLL_INTERVAL_MS).unref();
 
 // ---------- Graceful shutdown ----------
 process.once('SIGINT', () => {
