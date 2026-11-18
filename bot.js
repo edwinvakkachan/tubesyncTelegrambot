@@ -7,6 +7,7 @@ const {
   extractYoutubePlaylistId,
   extractYoutubePlaylistSeedId,
   extractVideoIdsFromPlaylistHtml,
+  extractYoutubeChannel,
 } = require('./utils/youtube');
 
 // ---------- Logging helpers ----------
@@ -29,6 +30,7 @@ const warn = (...args) => console.warn(`[${ts()}] ⚠️`, ...args);
 const err = (...args) => console.error(`[${ts()}] ❌`, ...args);
 
 const PLAYLIST_FETCH_TIMEOUT_MS = 15000;
+const CHANNEL_POLL_INTERVAL_MS = Math.max(60000, Number(process.env.CHANNEL_POLL_INTERVAL_MS) || 15 * 60 * 1000);
 const YOUTUBE_WEB_HEADERS = {
   'User-Agent':
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
@@ -211,12 +213,87 @@ async function fetchPlaylistVideoIds(playlistId) {
   return Array.from(ids);
 }
 
-async function addQueueItems(rows) {
-  const { error } = await supabase
-    .from('youtube_queue')
-    .insert(rows);
+async function resolveYoutubeChannelId(channel) {
+  if (channel.channelId) return channel.channelId;
+  const { data } = await axios.get(`${channel.url}/videos`, {
+    timeout: PLAYLIST_FETCH_TIMEOUT_MS,
+    headers: YOUTUBE_WEB_HEADERS,
+  });
+  const id = data.match(/(?:"externalId"|"browseId")\s*:\s*"(UC[A-Za-z0-9_-]{22})"/)?.[1];
+  if (!id) throw new Error('Could not resolve that channel. Try its /channel/UC... link or channel ID.');
+  return id;
+}
 
+async function fetchChannelVideoIds(channelId) {
+  // YouTube's uploads playlist is the channel ID with its UC prefix changed to UU.
+  return fetchPlaylistVideoIds(`UU${channelId.slice(2)}`);
+}
+
+async function getSubscriptions(chatId) {
+  const { data, error } = await supabase
+    .from('youtube_channel_subscriptions')
+    .select('channel_id, channel_url, last_seen_video_id')
+    .eq('chat_id', String(chatId));
   if (error) throw error;
+  return data || [];
+}
+
+async function saveSubscription(chatId, channelId, channelUrl, lastSeenVideoId) {
+  const { error } = await supabase.from('youtube_channel_subscriptions').upsert({
+    chat_id: String(chatId),
+    channel_id: channelId,
+    channel_url: channelUrl,
+    last_seen_video_id: lastSeenVideoId || null,
+  }, { onConflict: 'chat_id,channel_id' });
+  if (error) throw error;
+}
+
+async function queueChannelVideos(channelId, channelUrl, videoIds) {
+  if (!videoIds.length) return;
+  await addQueueItems(videoIds.map((youtubeId) => ({
+    youtube_id: youtubeId,
+    original_input: channelUrl,
+    status: 'pending',
+  })));
+}
+
+async function pollSubscriptions() {
+  try {
+    const { data: subscriptions, error } = await supabase
+      .from('youtube_channel_subscriptions')
+      .select('chat_id, channel_id, channel_url, last_seen_video_id');
+    if (error) throw error;
+
+    for (const subscription of subscriptions || []) {
+      try {
+        const videoIds = await fetchChannelVideoIds(subscription.channel_id);
+        const unseen = [];
+        for (const id of videoIds) {
+          if (id === subscription.last_seen_video_id) break;
+          unseen.push(id);
+        }
+        if (unseen.length) {
+          await queueChannelVideos(subscription.channel_id, subscription.channel_url, unseen);
+          await saveSubscription(subscription.chat_id, subscription.channel_id, subscription.channel_url, videoIds[0]);
+          await bot.sendMessage(subscription.chat_id, `🔔 ${unseen.length} new video(s) added from ${subscription.channel_url}`);
+        }
+      } catch (e) {
+        warn(`Subscription refresh failed for ${subscription.channel_id}:`, e.message);
+      }
+    }
+  } catch (e) {
+    warn('Could not refresh channel subscriptions:', e.message);
+  }
+}
+
+async function addQueueItems(rows) {
+  for (let offset = 0; offset < rows.length; offset += 500) {
+    const { error } = await supabase
+      .from('youtube_queue')
+      .insert(rows.slice(offset, offset + 500));
+
+    if (error) throw error;
+  }
 }
 
 bot.on('message', async (msg) => {
@@ -228,8 +305,59 @@ bot.on('message', async (msg) => {
   if (text === '/start') {
     return bot.sendMessage(
       chatId,
-      'Send me a YouTube link or video ID to queue it.'
+      'Send a YouTube video, playlist, or channel link to queue its videos.\n' +
+      'Commands: /subscribe <channel>, /unsubscribe <channel>, /subscriptions'
     );
+  }
+
+  const command = text.match(/^\/(subscribe|unsubscribe)(?:@\w+)?(?:\s+(.+))?$/i);
+  if (command) {
+    const channel = extractYoutubeChannel(command[2] || '');
+    if (!channel) return bot.sendMessage(chatId, `Usage: /${command[1]} <YouTube channel URL or channel ID>`);
+    try {
+      const channelId = await resolveYoutubeChannelId(channel);
+      if (command[1].toLowerCase() === 'unsubscribe') {
+        const { error } = await supabase.from('youtube_channel_subscriptions')
+          .delete().eq('chat_id', String(chatId)).eq('channel_id', channelId);
+        if (error) throw error;
+        return bot.sendMessage(chatId, `✅ Unsubscribed from ${channelId}.`);
+      }
+
+      const videoIds = await fetchChannelVideoIds(channelId);
+      await queueChannelVideos(channelId, channel.url, videoIds);
+      await saveSubscription(chatId, channelId, channel.url, videoIds[0]);
+      return bot.sendMessage(chatId, `✅ Subscribed to ${channelId}. Added ${videoIds.length} existing video(s); new uploads will be queued automatically.`);
+    } catch (e) {
+      err('Channel subscription failed:', e.message);
+      return bot.sendMessage(chatId, `❌ Could not ${command[1].toLowerCase()} channel:\n${e.message}`);
+    }
+  }
+
+  if (/^\/subscriptions(?:@\w+)?$/i.test(text)) {
+    try {
+      const subscriptions = await getSubscriptions(chatId);
+      return bot.sendMessage(chatId, subscriptions.length
+        ? `Subscribed channels:\n${subscriptions.map((item) => item.channel_url).join('\n')}`
+        : 'You have no channel subscriptions.');
+    } catch (e) {
+      return bot.sendMessage(chatId, `❌ Could not load subscriptions:\n${e.message}`);
+    }
+  }
+
+  if (/^\/(?:\w+)/.test(text)) return;
+
+  const channel = extractYoutubeChannel(text);
+  if (channel) {
+    try {
+      const channelId = await resolveYoutubeChannelId(channel);
+      const videoIds = await fetchChannelVideoIds(channelId);
+      if (!videoIds.length) return bot.sendMessage(chatId, '⚠️ I could not find any videos for that channel.');
+      await queueChannelVideos(channelId, channel.url, videoIds);
+      return bot.sendMessage(chatId, `✅ Added ${videoIds.length} channel videos to queue. To receive new uploads, use /subscribe ${channel.url}`);
+    } catch (e) {
+      err('Channel import failed:', e.message);
+      return bot.sendMessage(chatId, `❌ Failed to import channel:\n${e.message}`);
+    }
   }
 
   const playlistId = extractYoutubePlaylistId(text);
@@ -307,6 +435,8 @@ bot.on('message', async (msg) => {
     );
   }
 });
+
+setInterval(pollSubscriptions, CHANNEL_POLL_INTERVAL_MS).unref();
 
 // ---------- Graceful shutdown ----------
 process.once('SIGINT', () => {

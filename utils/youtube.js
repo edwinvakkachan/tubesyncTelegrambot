@@ -79,6 +79,26 @@ function extractYoutubePlaylistId(text = "") {
   return raw ? raw[1] : null;
 }
 
+function extractYoutubeChannel(text = "") {
+  const candidate = getCandidate(text);
+  const channelIdMatch = candidate.match(/\b(UC[A-Za-z0-9_-]{22})\b/);
+  if (channelIdMatch) return { channelId: channelIdMatch[1], url: `https://www.youtube.com/channel/${channelIdMatch[1]}` };
+
+  try {
+    const u = new URL(candidate);
+    const host = u.hostname.replace(/^www\./, "");
+    if (!["youtube.com", "m.youtube.com", "music.youtube.com"].includes(host)) return null;
+    const segments = u.pathname.split("/").filter(Boolean);
+    if (segments[0]?.startsWith("@") || ["channel", "user", "c"].includes(segments[0])) {
+      const channelPath = segments[0].startsWith("@") ? segments.slice(0, 1) : segments.slice(0, 2);
+      return { channelId: null, url: `https://www.youtube.com/${channelPath.join("/")}` };
+    }
+  } catch {
+    // Not a URL.
+  }
+  return null;
+}
+
 function extractYoutubePlaylistSeedId(text = "", playlistId = null) {
   const candidate = getCandidate(text);
   const list = playlistId || extractYoutubePlaylistId(candidate);
@@ -106,6 +126,7 @@ function extractVideoIdsFromPlaylistHtml(html = "") {
 module.exports = {
   extractYoutubeId,
   extractYoutubePlaylistId,
+  extractYoutubeChannel,
   extractYoutubePlaylistSeedId,
   extractVideoIdsFromPlaylistHtml,
 };
