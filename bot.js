@@ -60,48 +60,41 @@ const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 bot.on('polling_error', (e) => err('Polling error:', e?.message || e));
 
 function parseJsonAfter(text, marker) {
-  const markerIndex = text.indexOf(marker);
-  if (markerIndex === -1) return null;
+  let searchFrom = 0;
+  while (searchFrom < text.length) {
+    const markerIndex = text.indexOf(marker, searchFrom);
+    if (markerIndex === -1) return null;
+    searchFrom = markerIndex + marker.length;
 
-  const start = text.indexOf('{', markerIndex + marker.length);
-  if (start === -1) return null;
+    const start = text.indexOf('{', searchFrom);
+    if (start === -1) continue;
 
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-
-  for (let i = start; i < text.length; i += 1) {
-    const char = text[i];
-
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === '\\') {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < text.length; i += 1) {
+      const char = text[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') inString = false;
+        continue;
       }
 
-      continue;
-    }
-
-    if (char === '"') {
-      inString = true;
-    } else if (char === '{') {
-      depth += 1;
-    } else if (char === '}') {
-      depth -= 1;
-
-      if (depth === 0) {
-        try {
-          return JSON.parse(text.slice(start, i + 1));
-        } catch {
-          return null;
+      if (char === '"') inString = true;
+      else if (char === '{') depth += 1;
+      else if (char === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          try {
+            return JSON.parse(text.slice(start, i + 1));
+          } catch {
+            break;
+          }
         }
       }
     }
   }
-
   return null;
 }
 
@@ -124,7 +117,9 @@ function collectPlaylistData(value, ids = new Set(), continuations = new Set()) 
   }
 
   const continuationToken =
-    value.continuationItemRenderer?.continuationEndpoint?.continuationCommand?.token;
+    value.continuationItemRenderer?.continuationEndpoint?.continuationCommand?.token ||
+    value.continuationItemRenderer?.continuationEndpoint?.command?.continuationCommand?.token ||
+    value.nextContinuationData?.continuation;
   if (continuationToken) {
     continuations.add(continuationToken);
   }
@@ -136,8 +131,55 @@ function collectPlaylistData(value, ids = new Set(), continuations = new Set()) 
   return { ids, continuations };
 }
 
+function collectShortsData(value, ids = new Set(), continuations = new Set()) {
+  if (!value || typeof value !== 'object') return { ids, continuations };
+  if (Array.isArray(value)) {
+    for (const item of value) collectShortsData(item, ids, continuations);
+    return { ids, continuations };
+  }
+
+  const shortsId =
+    value.reelItemRenderer?.videoId ||
+    value.shortsLockupViewModel?.onTap?.innertubeCommand?.reelWatchEndpoint?.videoId ||
+    (value.lockupViewModel?.contentType === 'LOCKUP_CONTENT_TYPE_SHORTS'
+      ? value.lockupViewModel.contentId
+      : null);
+  if (/^[A-Za-z0-9_-]{11}$/.test(shortsId || '')) ids.add(shortsId);
+
+  const continuationToken =
+    value.continuationItemRenderer?.continuationEndpoint?.continuationCommand?.token ||
+    value.continuationItemRenderer?.continuationEndpoint?.command?.continuationCommand?.token ||
+    value.nextContinuationData?.continuation;
+  if (continuationToken) continuations.add(continuationToken);
+
+  for (const child of Object.values(value)) collectShortsData(child, ids, continuations);
+  return { ids, continuations };
+}
+
+function findShortsTabContent(value) {
+  if (!value || typeof value !== 'object') return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const content = findShortsTabContent(item);
+      if (content) return content;
+    }
+    return null;
+  }
+
+  const tab = value.tabRenderer;
+  if (tab?.title?.trim().toLowerCase() === 'shorts' && tab.content) return tab.content;
+
+  for (const child of Object.values(value)) {
+    const content = findShortsTabContent(child);
+    if (content) return content;
+  }
+  return null;
+}
+
 async function fetchPlaylistContinuation(token, config) {
-  if (!config?.INNERTUBE_API_KEY) return null;
+  if (!config?.INNERTUBE_API_KEY) {
+    throw new Error('Could not read YouTube continuation API settings from the channel page.');
+  }
 
   const context = config.INNERTUBE_CONTEXT || {
     client: {
@@ -158,7 +200,7 @@ async function fetchPlaylistContinuation(token, config) {
   return data;
 }
 
-async function fetchPlaylistVideoIds(playlistId) {
+async function fetchPlaylistVideoIds(playlistId, limit = Infinity) {
   const url = `https://www.youtube.com/playlist?list=${encodeURIComponent(playlistId)}`;
   const { data } = await axios.get(url, {
     timeout: PLAYLIST_FETCH_TIMEOUT_MS,
@@ -186,7 +228,7 @@ async function fetchPlaylistVideoIds(playlistId) {
   const seenContinuations = new Set();
   const queue = Array.from(continuations);
 
-  while (queue.length) {
+  while (queue.length && ids.size < limit) {
     const token = queue.shift();
     if (seenContinuations.has(token)) continue;
 
@@ -200,6 +242,7 @@ async function fetchPlaylistVideoIds(playlistId) {
 
     for (const id of nextIds) {
       ids.add(id);
+      if (ids.size >= limit) break;
     }
 
     for (const nextToken of nextContinuations) {
@@ -209,7 +252,7 @@ async function fetchPlaylistVideoIds(playlistId) {
     }
   }
 
-  return Array.from(ids);
+  return Array.from(ids).slice(0, limit);
 }
 
 async function resolveYoutubeChannelId(channel) {
@@ -223,9 +266,50 @@ async function resolveYoutubeChannelId(channel) {
   return id;
 }
 
-async function fetchChannelVideoIds(channelId) {
+async function fetchChannelVideoIds(channelId, limit = Infinity) {
   // YouTube's uploads playlist is the channel ID with its UC prefix changed to UU.
-  return fetchPlaylistVideoIds(`UU${channelId.slice(2)}`);
+  return fetchPlaylistVideoIds(`UU${channelId.slice(2)}`, limit);
+}
+
+async function fetchChannelShortIds(channelId, limit = Infinity) {
+  const { data } = await axios.get(`https://www.youtube.com/channel/${channelId}/shorts`, {
+    timeout: PLAYLIST_FETCH_TIMEOUT_MS,
+    headers: YOUTUBE_WEB_HEADERS,
+  });
+  const config = parseJsonAfter(data, 'ytcfg.set(');
+  const initialData =
+    parseJsonAfter(data, 'var ytInitialData =') ||
+    parseJsonAfter(data, 'ytInitialData =');
+  const shortsTabContent = findShortsTabContent(initialData);
+  if (!shortsTabContent) {
+    throw new Error('Could not find a Shorts tab for this channel.');
+  }
+  const ids = new Set();
+  const continuations = new Set();
+  collectShortsData(shortsTabContent, ids, continuations);
+
+  const seenContinuations = new Set();
+  const queue = Array.from(continuations);
+  while (queue.length && ids.size < limit) {
+    const token = queue.shift();
+    if (seenContinuations.has(token)) continue;
+    seenContinuations.add(token);
+
+    const continuationData = await fetchPlaylistContinuation(token, config);
+    if (!continuationData) continue;
+    const nextIds = new Set();
+    const nextContinuations = new Set();
+    collectShortsData(continuationData, nextIds, nextContinuations);
+    for (const id of nextIds) {
+      ids.add(id);
+      if (ids.size >= limit) break;
+    }
+    for (const nextToken of nextContinuations) {
+      if (!seenContinuations.has(nextToken)) queue.push(nextToken);
+    }
+  }
+
+  return Array.from(ids).slice(0, limit);
 }
 
 async function getSubscriptions(chatId) {
@@ -268,16 +352,95 @@ async function addQueueItems(rows) {
   }
 }
 
+const pendingChannelCounts = new Map();
+
+function channelDownloadOptions(channelId) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: 'All videos', callback_data: `ch|va|${channelId}` },
+          { text: 'All Shorts', callback_data: `ch|sa|${channelId}` },
+        ],
+        [
+          { text: 'Number of videos', callback_data: `ch|vn|${channelId}` },
+          { text: 'Number of Shorts', callback_data: `ch|sn|${channelId}` },
+        ],
+      ],
+    },
+  };
+}
+
+async function queueSelectedChannelItems(chatId, channelId, kind, limit = null) {
+  const videoIds = kind === 'shorts'
+    ? await fetchChannelShortIds(channelId, limit || Infinity)
+    : await fetchChannelVideoIds(channelId, limit || Infinity);
+  const selectedIds = limit ? videoIds.slice(0, limit) : videoIds;
+  if (!selectedIds.length) {
+    await bot.sendMessage(chatId, `⚠️ No ${kind === 'shorts' ? 'Shorts' : 'videos'} found for this channel.`);
+    return;
+  }
+
+  const channelUrl = `https://www.youtube.com/channel/${channelId}`;
+  await queueChannelVideos(channelId, channelUrl, selectedIds);
+  await bot.sendMessage(chatId, `✅ Added ${selectedIds.length} ${kind === 'shorts' ? 'Shorts' : 'videos'} to the download queue.`);
+}
+
+bot.on('callback_query', async (query) => {
+  const [prefix, choice, channelId] = (query.data || '').split('|');
+  if (prefix !== 'ch' || !/^UC[A-Za-z0-9_-]{22}$/.test(channelId || '')) return;
+
+  try {
+    const chatId = query.message.chat.id;
+    await bot.answerCallbackQuery(query.id);
+
+    if (choice === 'vn' || choice === 'sn') {
+      const kind = choice === 'sn' ? 'shorts' : 'videos';
+      pendingChannelCounts.set(String(chatId), { channelId, kind });
+      return bot.sendMessage(chatId, `How many ${kind === 'shorts' ? 'Shorts' : 'videos'} should I add? Send a positive whole number, or /cancel.`);
+    }
+
+    if (choice === 'va' || choice === 'sa') {
+      return queueSelectedChannelItems(chatId, channelId, choice === 'sa' ? 'shorts' : 'videos');
+    }
+  } catch (e) {
+    err('Channel download selection failed:', e.message);
+    if (query.message?.chat?.id) {
+      await bot.sendMessage(query.message.chat.id, `❌ Could not add channel downloads:\n${e.message}`);
+    }
+  }
+});
+
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = (msg.text || '').trim();
 
   if (!text) return;
 
+  if (/^\/cancel(?:@\w+)?$/i.test(text)) {
+    const canceled = pendingChannelCounts.delete(String(chatId));
+    return bot.sendMessage(chatId, canceled ? 'Cancelled the channel download request.' : 'There is no pending count request.');
+  }
+
+  const pendingCount = pendingChannelCounts.get(String(chatId));
+  if (pendingCount) {
+    if (!/^\d+$/.test(text) || Number(text) < 1 || !Number.isSafeInteger(Number(text))) {
+      return bot.sendMessage(chatId, 'Send a positive whole number, or /cancel.');
+    }
+    pendingChannelCounts.delete(String(chatId));
+    try {
+      await queueSelectedChannelItems(chatId, pendingCount.channelId, pendingCount.kind, Number(text));
+    } catch (e) {
+      err('Limited channel download failed:', e.message);
+      await bot.sendMessage(chatId, `❌ Could not add channel downloads:\n${e.message}`);
+    }
+    return;
+  }
+
   if (text === '/start') {
     return bot.sendMessage(
       chatId,
-      'Send a YouTube video, playlist, or channel link to queue its videos.\n' +
+      'Send a YouTube video or playlist to queue it. Send a channel link to choose videos or Shorts.\n' +
       'Commands: /subscribe <channel>, /unsubscribe <channel>, /subscriptions'
     );
   }
@@ -318,10 +481,11 @@ bot.on('message', async (msg) => {
   if (channel) {
     try {
       const channelId = await resolveYoutubeChannelId(channel);
-      const videoIds = await fetchChannelVideoIds(channelId);
-      if (!videoIds.length) return bot.sendMessage(chatId, '⚠️ I could not find any videos for that channel.');
-      await queueChannelVideos(channelId, channel.url, videoIds);
-      return bot.sendMessage(chatId, `✅ Added ${videoIds.length} channel videos to queue. To receive new uploads, use /subscribe ${channel.url}`);
+      return bot.sendMessage(
+        chatId,
+        'What would you like to download from this channel?',
+        channelDownloadOptions(channelId)
+      );
     } catch (e) {
       err('Channel import failed:', e.message);
       return bot.sendMessage(chatId, `❌ Failed to import channel:\n${e.message}`);

@@ -10,7 +10,7 @@ Runs inside **Docker** on Raspberry Pi 5 (ARM64) or any Linux host.
 - Accepts full YouTube URLs, playlist URLs, shorts, live, embed links, or raw 11-character video IDs.
 - Validates and extracts the correct YouTube video ID.
 - Extracts all video IDs from YouTube playlists and queues each one.
-- Accepts channel URLs or channel IDs and queues uploaded videos.
+- Shows channel download options for all videos, all Shorts, or a custom number of either.
 - Stores per-chat channel subscriptions in Supabase for TubeArchivist to process.
 - Calls your Tube API with `youtube_id` and marks status as `pending`.
 - Replies in Telegram with ✅ success or ❌ error messages.
@@ -38,7 +38,7 @@ Keep the Supabase service role key private.
 
 ## Channel commands
 
-- Send a channel URL or `UC...` channel ID to queue all currently available uploads.
+- Send a channel URL or `UC...` channel ID to choose all videos, all Shorts, a number of videos, or a number of Shorts. For a numbered option, send the desired count after selecting it.
 - `/subscribe <channel URL or ID>` writes an `action = subscribe`, `status = pending` request to Supabase without queueing videos.
 - `/unsubscribe <channel URL or ID>` writes an `action = unsubscribe`, `status = pending` request. The row stays available for TubeArchivist to process and update.
 - `/subscriptions` lists the current chat's subscriptions.
