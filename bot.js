@@ -57,6 +57,19 @@ log('Starting bot with polling...');
 // ---------- Bot ----------
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
+const BOT_COMMANDS = [
+  { command: 'start', description: 'Start the bot and see what it can do' },
+  { command: 'help', description: 'Show commands and usage examples' },
+  { command: 'subscribe', description: 'Subscribe to a YouTube channel' },
+  { command: 'unsubscribe', description: 'Unsubscribe from a YouTube channel' },
+  { command: 'subscriptions', description: 'List your subscribed channels' },
+  { command: 'cancel', description: 'Cancel a channel download prompt' },
+];
+
+bot.setMyCommands(BOT_COMMANDS).catch((e) => {
+  warn('Could not publish Telegram command menu:', e?.message || e);
+});
+
 bot.on('polling_error', (e) => err('Polling error:', e?.message || e));
 
 function parseJsonAfter(text, marker) {
@@ -354,6 +367,25 @@ async function addQueueItems(rows) {
 
 const pendingChannelCounts = new Map();
 
+const HELP_TEXT = [
+  'YouTube Download Bot',
+  '',
+  'Send a YouTube video link or 11-character video ID to add it to the download queue.',
+  'Send a playlist link to queue its videos. Send a channel link to choose videos or Shorts.',
+  '',
+  'Commands:',
+  '/start — start the bot',
+  '/help — show this help',
+  '/subscribe <channel URL or ID> — subscribe to a channel',
+  '/unsubscribe <channel URL or ID> — unsubscribe from a channel',
+  '/subscriptions — list your channel subscriptions',
+  '/cancel — cancel a pending count prompt',
+  '',
+  'Examples:',
+  '/subscribe https://www.youtube.com/@Google',
+  '/unsubscribe UCxxxxxxxxxxxxxxxxxxxxxx',
+].join('\n');
+
 function channelDownloadOptions(channelId) {
   return {
     reply_markup: {
@@ -417,7 +449,7 @@ bot.on('message', async (msg) => {
 
   if (!text) return;
 
-  if (/^\/cancel(?:@\w+)?$/i.test(text)) {
+  if (/^\/cancel(?:@\w+)?(?:\s|$)/i.test(text)) {
     const canceled = pendingChannelCounts.delete(String(chatId));
     return bot.sendMessage(chatId, canceled ? 'Cancelled the channel download request.' : 'There is no pending count request.');
   }
@@ -437,12 +469,8 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  if (text === '/start') {
-    return bot.sendMessage(
-      chatId,
-      'Send a YouTube video or playlist to queue it. Send a channel link to choose videos or Shorts.\n' +
-      'Commands: /subscribe <channel>, /unsubscribe <channel>, /subscriptions'
-    );
+  if (/^\/(?:start|help)(?:@\w+)?(?:\s|$)/i.test(text)) {
+    return bot.sendMessage(chatId, HELP_TEXT);
   }
 
   const command = text.match(/^\/(subscribe|unsubscribe)(?:@\w+)?(?:\s+(.+))?$/i);
@@ -464,7 +492,7 @@ bot.on('message', async (msg) => {
     }
   }
 
-  if (/^\/subscriptions(?:@\w+)?$/i.test(text)) {
+  if (/^\/subscriptions(?:@\w+)?(?:\s|$)/i.test(text)) {
     try {
       const subscriptions = await getSubscriptions(chatId);
       return bot.sendMessage(chatId, subscriptions.length

@@ -4,6 +4,18 @@ A simple Telegram bot that listens for YouTube links, playlists, or video IDs in
 Built with **Node.js**, **node-telegram-bot-api**, and **Axios**.  
 Runs inside **Docker** on Raspberry Pi 5 (ARM64) or any Linux host.
 
+## Local web chat
+
+The same bot can be used from a browser at `http://<server-LAN-IP>:4444`, including when the Telegram app is unavailable. It supports video links, playlist links, and the subscription commands below. Web chat subscriptions are kept separate per browser from Telegram chat subscriptions. The server discovers its active LAN IPv4 addresses at startup and displays them in the terminal and chat header; they can change when the server moves networks.
+
+1. Copy `.env.example` to `.env` and set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. `TELEGRAM_TOKEN` is optional if you only need web chat.
+2. Start the service with `npm start` or `docker compose up -d --build`.
+3. Open one of the LAN URLs printed at startup, or shown in the chat header, on a device connected to the same network. No sign-in is required.
+
+The default is HTTP. To enable HTTPS, place a certificate and private key in the local `certs` folder (for Docker), then set `WEB_CHAT_TLS_CERT=/certs/fullchain.pem` and `WEB_CHAT_TLS_KEY=/certs/privkey.pem`. Open `https://<server-LAN-IP>:4444`; the certificate must be trusted by the device/browser. For a trusted certificate, use a hostname covered by that certificate.
+
+The chat has no password because it is intended for your trusted local network. Anyone who can reach the server can add downloads and change web chat subscriptions. Use HTTPS certificates for encrypted LAN traffic when needed.
+
 ---
 
 ## ✨ Features
@@ -37,6 +49,13 @@ SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 Keep the Supabase service role key private.
 
 ## Channel commands
+
+The bot publishes these commands in Telegram's command menu when it starts:
+
+- `/start` and `/help` show the bot's usage guide.
+- `/cancel` cancels a pending request for a number of channel videos or Shorts.
+- `/subscribe <channel URL or ID>` and `/unsubscribe <channel URL or ID>` request subscription changes.
+- `/subscriptions` lists the current chat's subscriptions.
 
 - Send a channel URL or `UC...` channel ID to choose all videos, all Shorts, a number of videos, or a number of Shorts. For a numbered option, send the desired count after selecting it.
 - `/subscribe <channel URL or ID>` writes an `action = subscribe`, `status = pending` request to Supabase without queueing videos.

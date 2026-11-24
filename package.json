@@ -5,7 +5,8 @@
   "license": "MIT",
   "type": "commonjs",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node start.js",
+    "start:chat": "node local-chat-server.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.3",

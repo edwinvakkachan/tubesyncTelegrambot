@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f5f7">
+  <title>Tube Chat</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #20242c; background: #f4f5f7; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    .shell { width: min(900px, 100%); height: min(760px, calc(100vh - 48px)); min-height: 440px; display: flex; flex-direction: column; overflow: hidden; background: #fff; border: 1px solid #e6e8ec; border-radius: 18px; box-shadow: 0 18px 60px #26324812; }
+    header { display: flex; align-items: center; gap: 12px; padding: 18px 22px; border-bottom: 1px solid #eceef1; }
+    .avatar { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 14px; background: #2879e8; color: white; font-size: 20px; }
+    h1 { font-size: 16px; margin: 0 0 3px; } .sub { color: #7b8492; font-size: 12px; }
+    .connection { margin-left: auto; text-align: right; }
+    #status { color: #7b8492; font-size: 12px; }
+    #addresses { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 4px 10px; margin-top: 4px; }
+    #addresses a { color: #2879e8; font-size: 11px; text-decoration: none; }
+    #addresses a:hover { text-decoration: underline; }
+    #messages { flex: 1; overflow: auto; padding: 26px clamp(16px, 5vw, 54px); display: flex; flex-direction: column; gap: 16px; }
+    .message { max-width: min(78%, 620px); padding: 12px 15px; border-radius: 16px; font-size: 14px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .bot { align-self: flex-start; background: #f1f3f6; border-bottom-left-radius: 5px; }
+    .user { align-self: flex-end; color: #fff; background: #2879e8; border-bottom-right-radius: 5px; }
+    .composer { display: flex; gap: 10px; padding: 16px 20px 20px; border-top: 1px solid #eceef1; }
+    input { min-width: 0; flex: 1; border: 1px solid #dfe3e9; border-radius: 12px; outline: none; padding: 13px 15px; font: inherit; font-size: 14px; }
+    input:focus { border-color: #2879e8; box-shadow: 0 0 0 3px #2879e81a; }
+    button { border: 0; border-radius: 12px; padding: 0 20px; color: #fff; background: #2879e8; font: inherit; font-weight: 600; cursor: pointer; }
+    button:disabled { opacity: .55; cursor: wait; }
+    .hint { padding: 0 22px 12px; color: #8b929d; font-size: 11px; text-align: center; }
+    @media(max-width:520px) { body { padding: 0; } .shell { height: 100dvh; min-height: 0; border: 0; border-radius: 0; } header { padding: 14px 16px; } .composer { padding: 12px 14px 16px; } .message { max-width: 90%; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header><div class="avatar">▶</div><div><h1>Tube Chat</h1><div class="sub">Your local YouTube assistant</div></div><div class="connection"><div id="status">Connected</div><nav id="addresses" aria-label="Local server addresses"></nav></div></header>
+    <section id="messages" aria-live="polite"></section>
+    <div class="hint">Try /help, paste a YouTube link, or type a bot command.</div>
+    <form class="composer" id="composer"><input id="message" autocomplete="off" placeholder="Message Tube Chat…" aria-label="Message"><button id="send" type="submit">Send</button></form>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>

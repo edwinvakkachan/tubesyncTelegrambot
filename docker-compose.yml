@@ -3,7 +3,15 @@ services:
     build: .
     container_name: tubesyncbot   
     restart: unless-stopped
+    ports:
+      - "4444:4444"
+    volumes:
+      - ./certs:/certs:ro
     environment:
       TELEGRAM_TOKEN: ${TELEGRAM_TOKEN}
       SUPABASE_URL: ${SUPABASE_URL}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      WEB_CHAT_HOST: 0.0.0.0
+      WEB_CHAT_PORT: 4444
+      WEB_CHAT_TLS_KEY: ${WEB_CHAT_TLS_KEY:-}
+      WEB_CHAT_TLS_CERT: ${WEB_CHAT_TLS_CERT:-}
