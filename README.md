@@ -6,7 +6,7 @@ Runs inside **Docker** on Raspberry Pi 5 (ARM64) or any Linux host.
 
 ## Local web chat
 
-The same bot can be used from a browser at `http://<server-LAN-IP>:4444`, including when the Telegram app is unavailable. It supports video links, playlist links, and the subscription commands below. Web chat subscriptions are kept separate per browser from Telegram chat subscriptions. The server discovers its active LAN IPv4 addresses at startup and displays them in the terminal and chat header; they can change when the server moves networks.
+The same bot can be used from a browser at `http://<server-LAN-IP>:4444`, including when the Telegram app is unavailable. It supports video links, playlist links, channel actions, and the subscription commands below. Sending a channel link offers Subscribe, Unsubscribe, Download all videos, Download all Shorts, or a limited number of videos or Shorts. Web chat subscriptions are kept separate per browser from Telegram chat subscriptions. The server discovers its active LAN IPv4 addresses at startup and displays them in the terminal and chat header; they can change when the server moves networks.
 
 1. Copy `.env.example` to `.env` and set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. `TELEGRAM_TOKEN` is optional if you only need web chat.
 2. Start the service with `npm start` or `docker compose up -d --build`.

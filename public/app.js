@@ -13,6 +13,7 @@ if (!clientId) {
     });
   localStorage.setItem(clientKey, clientId);
 }
+let isSending = false;
 
 function addMessage(text, kind) {
   const node = document.createElement('div');
@@ -31,6 +32,49 @@ async function request(url, payload) {
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || 'Request failed.');
   return result;
+}
+
+function addChoices(choices) {
+  const group = document.createElement('div');
+  group.className = 'choices';
+  for (const choice of choices) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = choice.label;
+    button.addEventListener('click', async () => {
+      for (const option of group.querySelectorAll('button')) option.disabled = true;
+      await sendMessage(choice.message, choice.label);
+    });
+    group.append(button);
+  }
+  messages.append(group);
+  messages.scrollTop = messages.scrollHeight;
+  return group;
+}
+
+async function sendMessage(text, displayText = text) {
+  if (!text || isSending) return;
+  isSending = true;
+  addMessage(displayText, 'user');
+  input.value = '';
+  sendButton.disabled = true;
+  for (const option of document.querySelectorAll('.choices button')) option.disabled = true;
+  status.textContent = 'Thinking…';
+  let newChoiceGroup = null;
+  try {
+    const result = await request('/api/chat', { message: text, clientId });
+    addMessage(result.reply, 'bot');
+    if (result.choices?.length) newChoiceGroup = addChoices(result.choices);
+  } catch (e) { addMessage(e.message, 'bot'); }
+  finally {
+    isSending = false;
+    sendButton.disabled = false;
+    if (newChoiceGroup) {
+      for (const option of newChoiceGroup.querySelectorAll('button')) option.disabled = false;
+    }
+    status.textContent = 'Connected';
+    input.focus();
+  }
 }
 
 request('/api/info').then((info) => {
@@ -53,21 +97,7 @@ request('/api/info').then((info) => {
 
 document.querySelector('#composer').addEventListener('submit', async (event) => {
   event.preventDefault();
-  const text = input.value.trim();
-  if (!text) return;
-  addMessage(text, 'user');
-  input.value = '';
-  sendButton.disabled = true;
-  status.textContent = 'Thinking…';
-  try {
-    const result = await request('/api/chat', { message: text, clientId });
-    addMessage(result.reply, 'bot');
-  } catch (e) { addMessage(e.message, 'bot'); }
-  finally {
-    sendButton.disabled = false;
-    status.textContent = 'Connected';
-    input.focus();
-  }
+  await sendMessage(input.value.trim());
 });
 
 addMessage('Hi! I can queue YouTube downloads and manage channel subscriptions. Type /help to see the commands.', 'bot');

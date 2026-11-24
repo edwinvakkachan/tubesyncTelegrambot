@@ -14,10 +14,16 @@ const {
   extractVideoIdsFromPlaylistHtml,
   extractYoutubeChannel,
 } = require('./utils/youtube');
+const {
+  fetchChannelVideoIds,
+  fetchChannelShortIds,
+  resolveYoutubeChannelId,
+} = require('./utils/youtube-fetch');
 
 const PORT = Number(process.env.WEB_CHAT_PORT || 4444);
 const HOST = process.env.WEB_CHAT_HOST || '0.0.0.0';
 const MAX_BODY_BYTES = 16 * 1024;
+const pendingChannelCounts = new Map();
 
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
   console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.');
@@ -76,11 +82,7 @@ function clientChatId(clientId) {
 }
 
 async function resolveChannel(channel) {
-  if (channel.channelId) return channel.channelId;
-  const { data } = await axios.get(`${channel.url}/videos`, { timeout: 15000 });
-  const id = data.match(/(?:"externalId"|"browseId")\s*:\s*"(UC[A-Za-z0-9_-]{22})"/)?.[1];
-  if (!id) throw new Error('Could not resolve that channel. Try its /channel/UC... link.');
-  return id;
+  return resolveYoutubeChannelId(channel);
 }
 
 async function saveSubscription(chatId, channelId, channelUrl, action) {
@@ -102,7 +104,28 @@ async function addQueueItems(ids, originalInput) {
   }
 }
 
-const HELP = `Hi! I can queue YouTube downloads and manage channel subscriptions.\n\nCommands:\n/help — show this guide\n/subscribe <channel URL or ID> — subscribe\n/unsubscribe <channel URL or ID> — unsubscribe\n/subscriptions — list subscriptions\n\nSend a YouTube video link or ID to queue it. Send a playlist link to queue its videos.`;
+async function queueSelectedChannelItems(channelId, kind, limit = null) {
+  const ids = kind === 'shorts'
+    ? await fetchChannelShortIds(channelId, limit || Infinity)
+    : await fetchChannelVideoIds(channelId, limit || Infinity);
+  const selectedIds = limit ? ids.slice(0, limit) : ids;
+  if (!selectedIds.length) return `No ${kind === 'shorts' ? 'Shorts' : 'videos'} found for this channel.`;
+  await addQueueItems(selectedIds, `https://www.youtube.com/channel/${channelId}`);
+  return `✅ Added ${selectedIds.length} ${kind === 'shorts' ? 'Shorts' : 'videos'} to the download queue.`;
+}
+
+function channelChoices(channelId, channelUrl) {
+  return [
+    { label: 'Subscribe', message: `/subscribe ${channelUrl}` },
+    { label: 'Unsubscribe', message: `/unsubscribe ${channelUrl}` },
+    { label: 'Download all videos', message: `/download_videos_all ${channelId}` },
+    { label: 'Download all Shorts', message: `/download_shorts_all ${channelId}` },
+    { label: 'Download a number of videos', message: `/download_videos_count ${channelId}` },
+    { label: 'Download a number of Shorts', message: `/download_shorts_count ${channelId}` },
+  ];
+}
+
+const HELP = `Hi! I can queue YouTube downloads and manage channel subscriptions.\n\nCommands:\n/help — show this guide\n/subscribe <channel URL or ID> — subscribe\n/unsubscribe <channel URL or ID> — unsubscribe\n/subscriptions — list subscriptions\n/cancel — cancel a limited channel download prompt\n\nSend a YouTube video link or ID to queue it, a playlist link to queue its videos, or a channel link to choose subscription and download options.`;
 
 async function handleChat(text, clientId) {
   const chatId = clientChatId(clientId);
@@ -110,12 +133,34 @@ async function handleChat(text, clientId) {
   if (!input) throw new Error('Type a message first.');
   if (input.length > 2000) throw new Error('Please keep messages under 2,000 characters.');
 
+  const pendingCount = pendingChannelCounts.get(clientId);
+  if (pendingCount && /^\d+$/.test(input)) {
+    const count = Number(input);
+    if (!Number.isSafeInteger(count) || count < 1) return 'Send a positive whole number, or /cancel.';
+    pendingChannelCounts.delete(clientId);
+    return queueSelectedChannelItems(pendingCount.channelId, pendingCount.kind, count);
+  }
+
   const command = input.match(/^\/(\w+)(?:@\w+)?(?:\s+([\s\S]+))?$/);
+  if (pendingCount && !command) return 'Send a positive whole number, or /cancel.';
   if (command) {
     const name = command[1].toLowerCase();
     const arg = command[2]?.trim() || '';
     if (name === 'start' || name === 'help') return HELP;
-    if (name === 'cancel') return 'There is no pending web chat request to cancel.';
+    if (name === 'cancel') {
+      const canceled = pendingChannelCounts.delete(clientId);
+      return canceled ? 'Cancelled the limited channel download.' : 'There is no pending request to cancel.';
+    }
+    const download = name.match(/^download_(videos|shorts)_(all|count)$/);
+    if (download) {
+      if (!/^UC[A-Za-z0-9_-]{22}$/.test(arg)) return 'That channel ID is invalid. Send the channel link again.';
+      const kind = download[1] === 'shorts' ? 'shorts' : 'videos';
+      if (download[2] === 'count') {
+        pendingChannelCounts.set(clientId, { channelId: arg, kind });
+        return `How many ${kind === 'shorts' ? 'Shorts' : 'videos'} should I add? Enter a positive whole number, or /cancel.`;
+      }
+      return queueSelectedChannelItems(arg, kind);
+    }
     if (name === 'subscribe' || name === 'unsubscribe') {
       const channel = extractYoutubeChannel(arg);
       if (!channel) return `Usage: /${name} <YouTube channel URL or channel ID>`;
@@ -145,7 +190,14 @@ async function handleChat(text, clientId) {
   }
 
   const channel = extractYoutubeChannel(input);
-  if (channel) return 'That looks like a channel link. Use /subscribe <channel URL or ID> to follow it.';
+  if (channel) {
+    const channelId = await resolveChannel(channel);
+    const channelUrl = channel.channelId ? channel.url : `https://www.youtube.com/channel/${channelId}`;
+    return {
+      reply: 'What would you like to do with this channel?',
+      choices: channelChoices(channelId, channelUrl),
+    };
+  }
 
   const videoId = extractYoutubeId(input);
   if (!videoId) return 'I could not find a YouTube video, playlist, or command. Send /help for examples.';
@@ -174,7 +226,8 @@ async function route(req, res) {
   if (req.method === 'POST' && pathname === '/api/chat') {
     const body = await readJson(req);
     try {
-      return send(res, 200, { reply: await handleChat(body.message, body.clientId) });
+      const result = await handleChat(body.message, body.clientId);
+      return send(res, 200, typeof result === 'string' ? { reply: result } : result);
     } catch (e) {
       return send(res, 400, { error: e.message || 'The request failed.' });
     }
