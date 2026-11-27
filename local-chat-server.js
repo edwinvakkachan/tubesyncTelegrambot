@@ -6,17 +6,16 @@ const https = require('https');
 const os = require('os');
 const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
-const axios = require('axios');
 const {
   extractYoutubeId,
   extractYoutubePlaylistId,
   extractYoutubePlaylistSeedId,
-  extractVideoIdsFromPlaylistHtml,
   extractYoutubeChannel,
 } = require('./utils/youtube');
 const {
   fetchChannelVideoIds,
   fetchChannelShortIds,
+  fetchPlaylistVideoIds,
   resolveYoutubeChannelId,
 } = require('./utils/youtube-fetch');
 
@@ -179,14 +178,15 @@ async function handleChat(text, clientId) {
 
   const playlistId = extractYoutubePlaylistId(input);
   if (playlistId) {
-    const url = `https://www.youtube.com/playlist?list=${encodeURIComponent(playlistId)}`;
-    const { data: html } = await axios.get(url, { timeout: 15000, headers: { 'User-Agent': 'Mozilla/5.0' } });
-    const ids = extractVideoIdsFromPlaylistHtml(html);
+    const ids = await fetchPlaylistVideoIds(playlistId);
     const seedId = extractYoutubePlaylistSeedId(input, playlistId);
-    if (!ids.length && seedId) ids.push(seedId);
+    if (seedId && !ids.includes(seedId)) ids.unshift(seedId);
     if (!ids.length) return 'I found the playlist, but could not read any videos from it.';
     await addQueueItems(ids, input);
-    return `✅ Added ${ids.length} playlist videos to the download queue.`;
+    if (playlistId.startsWith('RD') && ids.length === 1) {
+      return `✅ Added the Mix seed video (${seedId}) to the download queue. YouTube did not expose the rest of this Mix.`;
+    }
+    return `✅ Added ${ids.length} ${playlistId.startsWith('RD') ? 'Mix videos' : 'playlist videos'} to the download queue.`;
   }
 
   const channel = extractYoutubeChannel(input);
@@ -229,6 +229,13 @@ async function route(req, res) {
       const result = await handleChat(body.message, body.clientId);
       return send(res, 200, typeof result === 'string' ? { reply: result } : result);
     } catch (e) {
+      if (e.isAxiosError) {
+        const status = e.response?.status || 'network error';
+        const detail = e.response?.data?.error?.message || e.message;
+        console.error(`YouTube request failed (${status}):`, detail);
+        return send(res, 502, { error: 'YouTube could not load this playlist right now. Please try again.' });
+      }
+      console.error('Web chat action failed:', e.message || e);
       return send(res, 400, { error: e.message || 'The request failed.' });
     }
   }

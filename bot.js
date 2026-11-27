@@ -266,9 +266,7 @@ bot.on('message', async (msg) => {
       const videoIds = await fetchPlaylistVideoIds(playlistId);
       const seedVideoId = extractYoutubePlaylistSeedId(text, playlistId);
 
-      if (!videoIds.length && seedVideoId) {
-        videoIds.push(seedVideoId);
-      }
+      if (seedVideoId && !videoIds.includes(seedVideoId)) videoIds.unshift(seedVideoId);
 
       if (!videoIds.length) {
         return bot.sendMessage(
@@ -289,7 +287,9 @@ bot.on('message', async (msg) => {
 
       return bot.sendMessage(
         chatId,
-        `✅ Added ${videoIds.length} playlist videos to queue.`
+        playlistId.startsWith('RD') && videoIds.length === 1
+          ? `✅ Added the Mix seed video (${seedVideoId}) to the download queue. YouTube did not expose the rest of this Mix.`
+          : `✅ Added ${videoIds.length} ${playlistId.startsWith('RD') ? 'Mix videos' : 'playlist videos'} to queue.`
       );
     } catch (e) {
       err('Playlist import failed:', e.message);

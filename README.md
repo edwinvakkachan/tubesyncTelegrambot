@@ -22,6 +22,7 @@ The chat has no password because it is intended for your trusted local network. 
 - Accepts full YouTube URLs, playlist URLs, shorts, live, embed links, or raw 11-character video IDs.
 - Validates and extracts the correct YouTube video ID.
 - Extracts all video IDs from YouTube playlists and queues each one.
+- Recognizes YouTube Mix URLs (`list=RD...`), reads the Mix from its watch page, and keeps the seed video in the queue if Mix entries are unavailable.
 - Shows channel download options for all videos, all Shorts, or a custom number of either.
 - Stores per-chat channel subscriptions in Supabase for TubeArchivist to process.
 - Calls your Tube API with `youtube_id` and marks status as `pending`.

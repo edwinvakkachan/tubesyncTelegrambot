@@ -59,7 +59,9 @@ function collectPlaylistData(value, ids = new Set(), continuations = new Set()) 
     return { ids, continuations };
   }
 
-  const playlistVideoId = value.playlistVideoRenderer?.videoId;
+  const playlistVideoId =
+    value.playlistVideoRenderer?.videoId ||
+    value.playlistPanelVideoRenderer?.videoId;
   if (/^[A-Za-z0-9_-]{11}$/.test(playlistVideoId || '')) {
     ids.add(playlistVideoId);
   }
@@ -77,6 +79,31 @@ function collectPlaylistData(value, ids = new Set(), continuations = new Set()) 
   }
 
   return { ids, continuations };
+}
+
+function findMixPlaylistData(value) {
+  if (!value || typeof value !== 'object') return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findMixPlaylistData(item);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  if (value.playlistPanelRenderer) return value.playlistPanelRenderer;
+  const playlist = value.playlist;
+  if (Array.isArray(playlist?.contents) && playlist.contents.some((item) =>
+    item?.playlistPanelVideoRenderer || item?.continuationItemRenderer
+  )) {
+    return playlist;
+  }
+
+  for (const child of Object.values(value)) {
+    const found = findMixPlaylistData(child);
+    if (found) return found;
+  }
+  return null;
 }
 
 function collectShortsData(value, ids = new Set(), continuations = new Set()) {
@@ -124,7 +151,7 @@ function findShortsTabContent(value) {
   return null;
 }
 
-async function fetchPlaylistContinuation(token, config) {
+async function fetchPlaylistContinuation(token, config, options = {}) {
   if (!config?.INNERTUBE_API_KEY) {
     throw new Error('Could not read YouTube continuation API settings from the channel page.');
   }
@@ -136,9 +163,14 @@ async function fetchPlaylistContinuation(token, config) {
     },
   };
 
+  const endpoint = options.endpoint || 'browse';
+  const requestBody = { context, continuation: token };
+  if (options.videoId) requestBody.videoId = options.videoId;
+  if (options.playlistId) requestBody.playlistId = options.playlistId;
+
   const { data } = await axios.post(
-    `https://www.youtube.com/youtubei/v1/browse?key=${encodeURIComponent(config.INNERTUBE_API_KEY)}`,
-    { context, continuation: token },
+    `https://www.youtube.com/youtubei/v1/${endpoint}?key=${encodeURIComponent(config.INNERTUBE_API_KEY)}`,
+    requestBody,
     {
       timeout: PLAYLIST_FETCH_TIMEOUT_MS,
       headers: YOUTUBE_WEB_HEADERS,
@@ -149,25 +181,37 @@ async function fetchPlaylistContinuation(token, config) {
 }
 
 async function fetchPlaylistVideoIds(playlistId, limit = Infinity) {
-  const url = `https://www.youtube.com/playlist?list=${encodeURIComponent(playlistId)}`;
-  const { data } = await axios.get(url, {
-    timeout: PLAYLIST_FETCH_TIMEOUT_MS,
-    headers: YOUTUBE_WEB_HEADERS,
-  });
+  const isMix = playlistId.startsWith('RD');
+  const mixSeedId = isMix ? playlistId.slice(2, 13) : null;
+  const validMixSeed = /^[A-Za-z0-9_-]{11}$/.test(mixSeedId || '') ? mixSeedId : null;
+  const url = validMixSeed
+    ? `https://www.youtube.com/watch?v=${encodeURIComponent(validMixSeed)}&list=${encodeURIComponent(playlistId)}`
+    : `https://www.youtube.com/playlist?list=${encodeURIComponent(playlistId)}`;
+  let data;
+  try {
+    ({ data } = await axios.get(url, {
+      timeout: PLAYLIST_FETCH_TIMEOUT_MS,
+      headers: YOUTUBE_WEB_HEADERS,
+    }));
+  } catch (error) {
+    if (validMixSeed) return [validMixSeed].slice(0, limit);
+    throw error;
+  }
 
   const config = parseJsonAfter(data, 'ytcfg.set(');
   const initialData =
     parseJsonAfter(data, 'var ytInitialData =') ||
     parseJsonAfter(data, 'ytInitialData =');
 
-  const ids = new Set();
+  const ids = new Set(validMixSeed ? [validMixSeed] : []);
   const continuations = new Set();
 
   if (initialData) {
-    collectPlaylistData(initialData, ids, continuations);
+    const playlistData = isMix ? findMixPlaylistData(initialData) : initialData;
+    if (playlistData) collectPlaylistData(playlistData, ids, continuations);
   }
 
-  if (!ids.size) {
+  if (!ids.size && !isMix) {
     for (const id of extractVideoIdsFromPlaylistHtml(data)) {
       ids.add(id);
     }
@@ -181,7 +225,9 @@ async function fetchPlaylistVideoIds(playlistId, limit = Infinity) {
     if (seenContinuations.has(token)) continue;
 
     seenContinuations.add(token);
-    const continuationData = await fetchPlaylistContinuation(token, config);
+    const continuationData = await fetchPlaylistContinuation(token, config, isMix
+      ? { endpoint: 'next', videoId: validMixSeed, playlistId }
+      : undefined);
     if (!continuationData) continue;
 
     const nextIds = new Set();
@@ -260,4 +306,4 @@ async function fetchChannelShortIds(channelId, limit = Infinity) {
   return Array.from(ids).slice(0, limit);
 }
 
-module.exports = { parseJsonAfter, collectPlaylistData, collectShortsData, findShortsTabContent, fetchPlaylistContinuation, fetchPlaylistVideoIds, resolveYoutubeChannelId, fetchChannelVideoIds, fetchChannelShortIds };
+module.exports = { parseJsonAfter, collectPlaylistData, findMixPlaylistData, collectShortsData, findShortsTabContent, fetchPlaylistContinuation, fetchPlaylistVideoIds, resolveYoutubeChannelId, fetchChannelVideoIds, fetchChannelShortIds };
